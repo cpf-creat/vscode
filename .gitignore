@@ -1,0 +1,22 @@
+# Python 虚拟环境（180MB）
+.venv/
+
+# 编辑器配置
+.idea/
+.vscode/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# adb 工具（17MB）。按 README「环境」一节自己下载
+tools/
+
+# 截图一律不传 —— 里面是手机全屏画面（状态栏、桌面），
+# 只留 5 个手工切出来的模板，它们才是脚本真正依赖的输入。
+images/*
+!images/play_btn.png
+!images/done.png
+!images/tab_undone.png
+!images/chip_video.png
+!images/template.png
