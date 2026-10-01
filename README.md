@@ -12,20 +12,29 @@ adb 截图  →  OpenCV 找图（返回坐标）  →  判断相似度  →  adb
 
 | 组件 | 版本 | 位置 |
 |---|---|---|
-| Python | 3.12.14 | conda 环境 `android_auto` |
+| Python | 3.14.6 | 项目内 `.venv/` |
 | OpenCV | 5.0.0 | 同上 |
 | adb | 1.0.41 | `tools/platform-tools/adb.exe` |
 
+`.venv/` 和 `tools/` 都不入库（见 `.gitignore`），克隆下来先自己建：
+
 ```bash
-D:/Anaconda/envs/android_auto/python.exe lessons/03_find_icon.py
+python -m venv .venv
+.venv/Scripts/pip install opencv-python numpy
+
+# 跑
+.venv/Scripts/python.exe lessons/03_find_icon.py
 ```
+
+> adb 在 Google 源被墙时，用腾讯镜像下：`https://mirrors.cloud.tencent.com/AndroidSDK/`
 
 ## 目录
 
 ```
-lessons/    课程代码
-tools/      adb 程序
-images/     截图和模板素材
+lessons/      课程代码（第 00~03 课）
+雨课堂/        第 04 课实战：自动播放脚本 text1.py
+tools/        adb 程序
+images/       截图和模板素材（只有 5 个模板入库，其余截图见 .gitignore）
 ```
 
 ## 学习进度
@@ -35,7 +44,8 @@ images/     截图和模板素材
 - [x] **第 02 课** OpenCV 找图：让程序自己找到图标 — `03_find_icon.py`
 - [x] **第 03 课** 稳定运行：动作打包成函数 → 串成能自我验证的流水线
   — `04_repeat.py`（函数）→ `05_tap_and_verify.py`（验证）→ `06_pipeline.py`（完整流水线）
-- [ ] **第 04 课** 实战：写一个完整可用的自动化脚本
+- [x] **第 04 课** 实战：写一个完整可用的自动化脚本
+  — `雨课堂/text1.py`：找「未完成」列表 → 进第一项 → 等播放按钮 → 播放 → 等播完 → 切下一节
 
 > `01_adb_basics.py` 和 `adb_kit.py` 是最早写的进阶版本，
 > 内容偏多，等基础打牢后再回头看。
@@ -45,7 +55,8 @@ images/     截图和模板素材
 ### 环境类
 
 - **Google 源被墙** → 用腾讯镜像 `mirrors.cloud.tencent.com/AndroidSDK/` 下 adb
-- **Python 3.14 没有 OpenCV 的包** → 另建 Python 3.12 的 conda 环境
+- **Python 3.14 当时装不上 OpenCV**（2026-09）→ 一度另建 Python 3.12 的 conda 环境。
+  后来 OpenCV 5.0.0 出了 3.14 的轮子，现在直接用项目内的 `.venv`（Python 3.14.6）。
 - **`cv2.imread` 读不了中文绝对路径** → 用 `os.chdir(ROOT)` 切到项目目录，改用相对路径
 - **相对路径找不到文件** → 脚本开头统一 `os.chdir(ROOT)`，在哪运行都对
 - **用 bash 的 `>` 重定向存截图会写坏文件**（终端里 `adb ... > x.png`）。
@@ -93,6 +104,19 @@ images/     截图和模板素材
   相似度 1.000 —— 白测一场，还差点冤枉了脚本。
 
 - **`range(1, 3)` 只跑 2 次**，含头不含尾。它不报错，只是默默少做一次。
+
+- **手机 offline 时 `screencap` 一个字节都不吐** → 写出 0 字节的文件 →
+  `cv2.imread` 对此**静默返回 `None`**，错误一路拖到几百行外的 `matchTemplate` 才炸，
+  报的还是一句跟掉线毫无关系的 `type == _templ.type()`。
+  → **截图后立刻检查 `img is None`，在源头报错**；恢复用 `adb reconnect`。
+
+- **匹配数 ≠ 目标数**。同一个图标在屏幕上出现 6 次，`np.where(scores >= 0.8)` 捞出 18 处 ——
+  滑动窗口挪 1 像素画面几乎没变，相邻位置分数照样很高（0.848 / 1.000 / 0.848）。
+  → 要「最靠上那个」就取 `ys.argmin()`，别把匹配数当成卡片数。
+
+- **能确定的那一步只做一次，别「退到对为止」**。找不到列表时按一次返回是**有把握**的
+  （从视频页退一步必然回到列表页）；而「一直退到看见为止」一旦判定出错，
+  会一路退出课程、退回桌面。→ 修的时候只做你能确定的那一步。
 
 ## 三条铁律
 
