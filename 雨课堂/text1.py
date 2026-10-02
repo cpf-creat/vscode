@@ -8,14 +8,18 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import kit          # 工具箱：shot / find / load / tap_at / press_back / back_home
-                    #         find_topmost / wait_for / THRESHOLD
+                    #         find_topmost / wait_for / what_page / THRESHOLD
                     # 凡是"跟哪个 App 无关"的都在 kit 里，这里只留雨课堂特有的
 
 MAX_SECTIONS = 50       # 安全上限，不是目标：正常靠"「未完成」列表跑空"退出。
                         # while 循环 + "真的会去点你手机"的副作用 = 必须装个刹车，
                         # 万一哪天判定逻辑出问题，最多做 50 节就自己停。
 
-STUCK_AFTER = 100       # 给 kit.wait_for 的卡死阈值：画面连续这么多秒一动没动就放弃。
+MAX_STEPS = 200         # 总步数刹车。改成状态机之后，"一轮"可能只做半件事，
+                        # 出口不像以前那么直观（比如点了播放但没点上，下一轮还是"待播放"），
+                        # 所以给整个循环再上一道保险。
+
+STUCK_AFTER = 100       # 给 kit.wait_for 的卡死阈值：画面连续这么多秒一动没动就抛异常。
                         # ⚠ 这是拍的估计值，没实测过：视频播到静止课件时画面本来就不动。
                         #   等下次有视频在播，量一下"播放时相邻帧的真实差异"再定。
 
@@ -30,98 +34,82 @@ template4 = kit.load("images/chip_video.png")   # 每条课程左上角的「视
 
 CARD_DY = 194        # 从小标签【顶边】往下量到卡片正中的距离（923 - 729，都是量出来的）
 
+# 认页面的名单：(页面名, 模板, 阈值)。顺序就是优先级，从上往下比，谁先达标算谁。
+# 名单在这里给，不在 kit 里 —— kit 不认识雨课堂，"哪张图代表哪一页"只有这里知道。
+MARKERS = [
+    ("列表页", template3, 0.8),     # 「未完成」Tab 在 = 课程列表页
+    ("已播完", template2, 0.8),     # 「已完成」在 = 这节播完了
+    ("待播放", template,  0.9),     # 大播放按钮在 = 停着没播（刚进来，或被人暂停了）
+]
+# 放最后那行阈值是 0.9 而不是 0.8：这个模板最容易认错 —— 实测在手机「设置」页
+# 能蒙到 0.719，离 0.8 只剩 0.08。真出现时是 0.972，所以卡到 0.9 才安全。
 
-#第三部分:主循环
-# 每一轮都从「未完成」列表页出发 —— 跟 06_pipeline 开头先按 Home 是同一个道理：
-# 做事之前，先把界面弄到一个【已知】状态，别指望手机碰巧停在哪儿。
-done = 0          # 真正【做完】了几节 —— 只在整节跑完后才 +1，中途停的节不算数
-while done < MAX_SECTIONS:
-    print(f"=== 第 {done + 1} 节 ===")
 
-    # ① 找「未完成」Tab 并点它。用找图，不写死坐标 —— 坐标会随机型/系统版本变，找图不会
-    #    这一步顺便当了守卫：能找到这三个字，说明手机确实停在课程列表页
-    tab = kit.wait_for(template3, timeout=8, quiet=True)
+#第三部分:主循环 —— 每轮【看一眼在哪个页面，只做一件事】
+# 跟上一版最大的区别：不再是"从头到尾走一遍固定流程"，而是"看现在在哪 → 做该做的那一步 → 再回头看"。
+# 好处是中途被打断、或者跑之前手机就已经停在视频页，它都能自己接上，不用退出去重来。
+in_course = False   # 是不是【点进某个课程里了】。专门用来解那个"认不出来的页面"：
+                    # 课程里屏幕上一片空白 = 正在播；不在课程里还认不出 = 陌生页面，该退回去。
+done = 0            # 真正【做完】了几节
+steps = 0           # 走了多少步（防呆）
+while done < MAX_SECTIONS and steps < MAX_STEPS:
+    steps += 1
+    screen = kit.shot("images/look.png")
+    page, score = kit.what_page(screen, MARKERS)
+    if page is None and in_course:
+        page = "播放中"      # 课程里四个标志物全不亮，那只能是正在播 —— 靠记忆补出来
+    print(f"=== 第 {done + 1} 节 | 第 {steps} 步 | 现在在：{page or '不认识的页面'}"
+          f"（最高分 {score:.3f}）===")
 
-    #    找不到？那多半是手机还停在【视频页】上（你手动去看了、或者上轮的返回没生效）。
-    #    按一次返回就回到列表了。只退这一次：万一本来就在列表页、只是 Tab 变灰了，
-    #    多退会把整个课程退出，越修越远。
-    if tab is None:
-        print("没看到「未完成」Tab，按一次返回再找")
+    if page == "列表页":
+        # 做完的会自动从「未完成」消失、下一项顶上来 → 第一项【永远】是下一个要做的
+        chip = kit.find_topmost(template4, screen)
+        if chip is None:
+            time.sleep(3)               # 也可能只是页面还没加载完，给第二次机会
+            chip = kit.find_topmost(template4, kit.shot("images/look.png"))
+        if chip is None:
+            print("列表上一个「视频」标签都没有了 —— 全部做完，收工")
+            break                       # 注意 done 没有 +1：这一节压根没做
+        kit.tap_at(chip[0] + template4.shape[1] // 2, chip[1] + CARD_DY)
+        in_course = True
+        time.sleep(3)
+
+    elif page == "待播放":
+        # 走到这儿有两种可能：刚点进课程还没开始播；或者播到一半被人按了暂停。
+        # 两种都该做同一件事 —— 点它。所以"暂停自救"不用另写代码，它就是这一步。
+        loc = kit.find_topmost(template, screen, 0.9)
+        # 这里不查 loc is None：what_page 刚用同一个模板、同一个阈值在这张图上认出了
+        # "待播放"，那 find_topmost 必然也找得到。同一个计算不用查两遍。
+        print("点播放")
+        kit.tap_at(loc[0] + template.shape[1] // 2, loc[1] + template.shape[0] // 2)
+        time.sleep(4)
+
+    elif page == "播放中":
+        print("播放中，等它结束……")
+        try:
+            found = kit.wait_for(template2, timeout=1800, quiet=True, stuck_after=STUCK_AFTER)
+        except kit.WaitFailed as e:
+            print(f"出事了：{e}")       # ← 第 4 步会在这里接上"先看看是不是暂停了"
+            exit()
+        if found is None:
+            print("等满 30 分钟还没变成「已完成」，放弃")
+            exit()
+
+    elif page == "已播完":
+        if in_course:
+            # 只有【自己点进去的】才记账。启动时手机要是正好停在一个播完的页面上，
+            # 那不是这一轮做的，记了就成了虚报。
+            done += 1
+            print(f"这节做完了，累计 {done} 节")
+        kit.press_back()
+        in_course = False
+        time.sleep(2)
+
+    else:
+        # 既没有页面标志，也不在课程里 —— 手机不知道停在哪个界面上了。
+        # 按一次返回：这是【有把握】的那一步（跟以前"只退一次"是同一个道理）。
+        print("这个页面不认识，按一次返回看看")
         kit.press_back()
         time.sleep(2)
-        tab = kit.wait_for(template3, timeout=8, quiet=True)
-
-    if tab is None:
-        print("按了返回还是没看到列表，手机可能不在课程页，停")
-        exit()
-
-    kit.tap_at(tab[0] + template3.shape[1] // 2, tab[1] + template3.shape[0] // 2)
-    time.sleep(1.5)
-
-    # ② 进第一项
-    #    做完的会自动从「未完成」消失、下一项顶上来 → 第一项【永远】是下一个要做的
-    #    每张卡左上角都有个一模一样的「视频」小标签，屏幕上同时有好几个，
-    #    取【最靠上】的那个就是第一项 —— 不写死坐标，列表滚了也不怕
-    chip = kit.find_topmost(template4, kit.shot("images/look.png"))
-    if chip is None:
-        time.sleep(3)          # 也可能只是页面还没加载完 —— 给它第二次机会，别急着下结论
-        chip = kit.find_topmost(template4, kit.shot("images/look.png"))
-    if chip is None:
-        # 一个「视频」小标签都找不到 = 「未完成」列表空了 = 全部做完。
-        # 这就是断点续跑免费的原因：做完的课会从列表消失，重启后第一项自动是没做的那节。
-        print("「未完成」列表里一个「视频」标签都找不到了 —— 全部做完，收工")
-        break                  # 注意 done 没有 +1：这一节压根没做
-    kit.tap_at(chip[0] + template4.shape[1] // 2, chip[1] + CARD_DY)
-    time.sleep(3)
-
-    # ③ 万一进了个已完成的：这不该发生（做完的会从列表消失），所以是异常，停下来看
-    score_done, _ = kit.find(template2, kit.shot("images/look.png"))
-    if score_done >= kit.THRESHOLD:
-        print("这节显示「已完成」，却还留在未完成列表里 —— 情况不对，停下来人工看看")
-        exit()
-
-    # ④ 等播放按钮出现
-    t0 = time.time()
-    location = kit.wait_for(template, timeout=10)
-    if location is None:
-        print(f"等了 {time.time() - t0:.1f} 秒没出现播放按钮，放弃")
-        exit()
-    print(f"等到了，耗时 {time.time() - t0:.1f} 秒")
-
-    # ⑤ 点它
-    x, y = location
-    kit.tap_at(x + template.shape[1] // 2, y + template.shape[0] // 2)
-    time.sleep(4)
-
-    # ⑥ 验证：大 ▶ 应该消失
-    score2, _ = kit.find(template, kit.shot("images/after_tap.png"))
-    print(f"点完后播放按钮相似度 {score2:.3f}")
-    if score2 >= kit.THRESHOLD:
-        print("按钮还在，没点上，放弃")
-        exit()
-
-    # ⑦ 等视频播完
-    print("播放中，等它结束……")
-    # quiet=True：30 分钟能跑一千多轮，不关掉会刷一千多行，把有用的信息全冲走
-    # 超时/卡死都不再写死"30 分钟"，改成实报耗时 —— 因为卡死检测会提前返回
-    t_end = time.time()
-    try:
-        found = kit.wait_for(template2, timeout=1800, quiet=True, stuck_after=STUCK_AFTER)
-    except kit.WaitFailed as e:
-        # 截不到图 / 画面不动，都算"出了事"。这里【暂时】跟等满超时一样处理，
-        # 分工自救留到第 4 步。现在先接住，是为了别让一个常见意外
-        # （视频被暂停）炸成一屏 traceback —— 报错没人接，是最难查的一种。
-        print(f"等了 {time.time() - t_end:.0f} 秒，出事了：{e}")
-        exit()
-    if found is None:
-        print(f"等了 {time.time() - t_end:.0f} 秒还没变成「已完成」，放弃")
-        exit()
-    print("这节播完了")
-
-    # ⑧ 这一节真做完了，才记账；然后回列表页，下一轮重新从 ① 开始
-    done += 1
-
-    kit.press_back()
-    time.sleep(2)
 
 print(f"\n收工，这次一共做了 {done} 节。")
