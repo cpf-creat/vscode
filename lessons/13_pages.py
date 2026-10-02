@@ -13,22 +13,29 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import kit
 
+#测试数据
 TEMPLATES = {
     "未完成Tab": "images/tab_undone.png",
     "视频小标签": "images/chip_video.png",
     "大播放按钮": "images/play_btn.png",
     "已完成字样": "images/done.png",
 }
+#忽略
 SKIP = {p.replace("/", os.sep) for p in TEMPLATES.values()}
 
+#防止路径错误
 tpls = {name: kit.load(path) for name, path in TEMPLATES.items()}
 
+#格式输出不需要太纠结
 header = f"{'截图':<20}" + "".join(f"{n:>13}" for n in tpls)
 print(header)
 print("-" * len(header))
 
+#遍历images目录
 for f in sorted(os.listdir("images")):
+    #取images图片路径
     path = os.path.join("images", f)
+    #不是png格式pass
     if not f.endswith(".png") or path in SKIP or os.path.getsize(path) > 2_000_000:
         continue
     try:
@@ -36,12 +43,14 @@ for f in sorted(os.listdir("images")):
     except FileNotFoundError as e:
         print(f"{f:<20}  跳过：{e}")
         continue
+
     # 模板比图还大，matchTemplate 直接报 cv2.error（不是 None！）——
     # 说明这个文件压根不是整屏截图，是个局部裁剪，比不了
     if any(screen.shape[0] < t.shape[0] or screen.shape[1] < t.shape[1]
            for t in tpls.values()):
         print(f"{f:<20}  跳过：{screen.shape[1]}x{screen.shape[0]} 比模板还小，是局部裁剪")
         continue
+
     # 够 0.8 就打个星号，一眼看出哪几个是"真的找到了"而不是"最像的那个"
     scores = [kit.find(t, screen)[0] for t in tpls.values()]
     cells = "".join(f"{s:>12.3f}{'*' if s >= kit.THRESHOLD else ' '}" for s in scores)

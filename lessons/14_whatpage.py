@@ -26,6 +26,7 @@ PLAY_BTN_SCORE = 0.85
 MARKERS = [
     ("列表页", template_tab, 0.8),
     ("已播完", template_done, 0.8),
+    #空下来因为下面一部分代码的作用是寻找这个最优值
     ("待播放", template_play, PLAY_BTN_SCORE),
 ]
 
@@ -38,8 +39,13 @@ SAMPLES = [
     ("images/page_noise_vivo.png",     None),   # 蓝心小V 页：噪声里最狠的一张
 ]
 
+
+
+#判断检测的准确不准确
 fails = 0
 for path, expect in SAMPLES:
+    #每次循环从sample取一张图片，然后看makers中哪一个图片最符合这个图片
+    #相当于拿一张图片和makers里的每一张图片一一比对，每次比对会有一个分数，分数超过阈值的会比对成功
     got, score = kit.what_page(kit.load(path), MARKERS)
     ok = got == expect
     fails += not ok
@@ -47,6 +53,8 @@ for path, expect in SAMPLES:
           f" 最高分 {score:.3f}   期望 {expect}")
 
 print(f"\n{len(SAMPLES) - fails}/{len(SAMPLES)} 判对")
+
+
 
 # ---------- 对照实验：这条线到底该画哪儿 ----------
 # 光说"0.85 判对了"没有意义 —— 0.8 也判对了，0.9 更判得对。得问：
@@ -57,12 +65,16 @@ noise_vivo = kit.load("images/page_noise_vivo.png")
 noise_set = kit.load("images/page_noise_settings.png")
 hit_paused = kit.load("images/page_paused.png")
 
+#寻找makers里的阈值的最优值
 for th in (0.85, 0.8, 0.7):
     # 三张图同一个阈值下的表现，一行看全
+    #what_page返回名字和位置，未匹配到返回None
     v, _ = kit.what_page(noise_vivo, [("待播放", template_play, th)])
     s, _ = kit.what_page(noise_set,  [("待播放", template_play, th)])
     h, _ = kit.what_page(hit_paused, [("待播放", template_play, th)])
     flag = "  ← 噪声越线了！" if (v or s) else ""
+    #这个测试是找一个相似的图片，如果v返回None表示未匹配成功，即相似图片与模板未匹配,此时这个阈值是健康的，如果在某一个阈值下匹配成功了
+    #那么这个阈值是不健康的，需要调整
     print(f"  阈值 {th:.2f}   蓝心小V {'误判成待播放' if v else '认不出  '}"
           f"   设置页 {'误判成待播放' if s else '认不出  '}"
           f"   真·暂停页 {'认得出' if h else '认不出'}{flag}")

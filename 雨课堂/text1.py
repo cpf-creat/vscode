@@ -11,6 +11,44 @@ import kit          # 工具箱：shot / find / load / tap_at / press_back / bac
                     #         find_topmost / wait_for / what_page / THRESHOLD
                     # 凡是"跟哪个 App 无关"的都在 kit 里，这里只留雨课堂特有的
 
+
+# ── 日志：把 print 的出口一分为二，屏幕一份、文件一份 ──
+class Tee:
+    """同时往【屏幕】和【文件】写。
+
+    为什么不每处 print 后面再补一句写文件：跑一晚上，终端滚过去就没了。
+    半夜崩了，手里没有任何记录 —— 停在第几步、当时判成了哪一页、等了多久，
+    全不知道。而 print 一共十几处，漏一处就漏一块真相。
+
+    最省事的办法是换掉 sys.stdout：代码里所有 print 一个字都不用改，
+    出口却变成了两份 —— 连 kit 内部那些打印也一起收进来了。
+    """
+    def __init__(self, path):
+        self.screen = sys.stdout        # ← 先存下【真正的屏幕】再说
+                                        #   下面一句 sys.stdout 就被换成 Tee 自己了。
+                                        #   要是这里直接写 self.screen = sys.stdout 之外的
+                                        #   任何形式去"稍后再读"，拿到的就是它自己 ——
+                                        #   然后 flush() 一调就无限递归。
+        self.file = open(path, "a", encoding="utf-8")
+
+    def write(self, text):
+        self.screen.write(text)
+        self.file.write(text)
+        self.file.flush()               # 立刻落盘：被 Ctrl+C 打断也不丢最后几行
+
+    def flush(self):
+        self.screen.flush()
+        self.file.flush()
+
+
+os.makedirs("logs", exist_ok=True)      # kit 导入时已经 chdir 到项目根了
+sys.stdout = Tee("logs/run.log")        # 从这一行起，下面所有 print 都自动写文件
+
+print("=" * 60)
+print(f"=== 新一次运行 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
+print("=" * 60)
+
+
 MAX_SECTIONS = 50       # 安全上限，不是目标：正常靠"「未完成」列表跑空"退出。
                         # while 循环 + "真的会去点你手机"的副作用 = 必须装个刹车，
                         # 万一哪天判定逻辑出问题，最多做 50 节就自己停。
@@ -91,8 +129,10 @@ while done < MAX_SECTIONS and steps < MAX_STEPS:
     if page == "待播放":
         in_course = True
 
-    print(f"=== 第 {done + 1} 节 | 第 {steps} 步 | 现在在：{page or '不认识的页面'}"
-          f"（最高分 {score:.3f}）===")
+    # 带上钟点。日志里光有"第几步"看不出"等了多久" ——
+    # 23:15 写着"播放中"，下一条 23:52 才出现，中间 37 分钟就是那段等待。
+    print(f"[{time.strftime('%H:%M:%S')}] === 第 {done + 1} 节 | 第 {steps} 步 | "
+          f"现在在：{page or '不认识的页面'}（最高分 {score:.3f}）===")
 
     if page == "列表页":
         # 做完的会自动从「未完成」消失、下一项顶上来 → 第一项【永远】是下一个要做的
@@ -171,3 +211,4 @@ while done < MAX_SECTIONS and steps < MAX_STEPS:
         time.sleep(2)
 
 print(f"\n收工，这次一共做了 {done} 节。")
+

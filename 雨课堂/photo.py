@@ -10,4 +10,4 @@ def shot(name):
     raw = subprocess.run([ADB, "exec-out", "screencap", "-p"], capture_output=True).stdout
     open(name, "wb").write(raw)
     return cv2.imread(name)
-shot("images/temp.png")
+shot("images/temp2.png")
