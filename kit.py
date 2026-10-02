@@ -68,6 +68,24 @@ def find(template, screen):
     _, score, _, location = cv2.minMaxLoc(scores)
     return score, location
 
+def color_ratio(bgr, lo, hi):
+    """这块像素里，有多少比例落在 [lo, hi] 这个 HSV 范围里。
+
+    为什么需要它：matchTemplate 的 TM_CCOEFF_NORMED 是【对比度归一化】的 ——
+    它把两边的亮度对比度拉到同一尺度再比结构，颜色在这一步被丢掉了。
+    所以"白底蓝三角"和"黑底灰圆圈"只要轮廓像就能算到 0.81。
+
+    颜色检查不归一化，直接问"这块是不是蓝的"，噪声当场露馅。
+    实测（雨课堂播放按钮）：真命中 83.3%，噪声 0.0%。
+
+    lo / hi 是调用者给的两个 (H, S, V) 边界 —— kit 不认识任何 App 的配色，
+    "雨课堂的蓝是哪一种蓝"只有写脚本的人知道。
+    """
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    inside = cv2.inRange(hsv, np.array(lo, np.uint8), np.array(hi, np.uint8))
+    return float((inside > 0).mean())
+
+
 def tap_at(x, y):
     subprocess.run([ADB, "shell", "input", "tap", str(x), str(y)])
 
