@@ -23,6 +23,12 @@ STUCK_AFTER = 100       # 给 kit.wait_for 的卡死阈值：画面连续这么�
                         # ⚠ 这是拍的估计值，没实测过：视频播到静止课件时画面本来就不动。
                         #   等下次有视频在播，量一下"播放时相邻帧的真实差异"再定。
 
+MAX_STUCK = 3           # "画面不动"最多忍几次。理由是：这个信号分不清两件事 ——
+                        #   a) 视频真被暂停了  → 回去看会看到「待播放」，点一下就救回来（好事）
+                        #   b) 视频在放静止课件 → 回去看还是「播放中」，什么也做不了（白等）
+                        # 两种都拦着不给放弃，碰上 b 就会无限空转。所以给个次数上限。
+                        # 每忍一次要等满 STUCK_AFTER 秒，3 次 ≈ 5 分钟，不冤。
+
 
 #第二部分:模板和这个项目特有的参数（判断逻辑都搬进 kit 了）
 #模板只读一次，别放循环里反复读磁盘
@@ -52,6 +58,7 @@ in_course = False   # 是不是【点进某个课程里了】。专门用来解�
                     # 课程里屏幕上一片空白 = 正在播；不在课程里还认不出 = 陌生页面，该退回去。
 done = 0            # 真正【做完】了几节
 steps = 0           # 走了多少步（防呆）
+stuck_count = 0     # 连着几次"画面不动"了。每次真的做成了点什么（点了播放/换了页）就清零
 while done < MAX_SECTIONS and steps < MAX_STEPS:
     steps += 1
     screen = kit.shot("images/look.png")
@@ -82,20 +89,37 @@ while done < MAX_SECTIONS and steps < MAX_STEPS:
         # "待播放"，那 find_topmost 必然也找得到。同一个计算不用查两遍。
         print("点播放")
         kit.tap_at(loc[0] + template.shape[1] // 2, loc[1] + template.shape[0] // 2)
+        stuck_count = 0     # 真的做了点什么 = 有进展，之前那些"画面不动"一笔勾销
         time.sleep(4)
 
     elif page == "播放中":
         print("播放中，等它结束……")
         try:
             found = kit.wait_for(template2, timeout=1800, quiet=True, stuck_after=STUCK_AFTER)
-        except kit.WaitFailed as e:
-            print(f"出事了：{e}")       # ← 第 4 步会在这里接上"先看看是不是暂停了"
+        except kit.OfflineError as e:
+            # 手机掉了。这种自救没意义 —— 连屏幕都拍不到，还能点什么？
+            # 重试也没用：shot() 内部已经 reconnect 过 5 次了，扛不住的是物理断连。
+            print(f"手机掉了：{e}")
             exit()
+        except kit.StuckError as e:
+            # 画面不动了。最常见的原因就是【视频被人按了暂停】——
+            # 而暂停的时候，大播放按钮是会显出来的。
+            # 所以别在这儿急着下结论，退回去重新看一眼页面：
+            # 真要是暂停了，上面的「待播放」分支会自己把播放点回去。
+            # 自救不需要单独写一段代码，它就是"再看一眼"。
+            stuck_count += 1
+            if stuck_count > MAX_STUCK:
+                print(f"连着 {stuck_count} 次画面都不动，不像是暂停，放弃")
+                exit()
+            print(f"画面不动了（第 {stuck_count}/{MAX_STUCK} 次）—— 退回去看看在哪一页")
+            continue
         if found is None:
             print("等满 30 分钟还没变成「已完成」，放弃")
             exit()
+        stuck_count = 0     # 等到了，说明这回是真播完了
 
     elif page == "已播完":
+        stuck_count = 0
         if in_course:
             # 只有【自己点进去的】才记账。启动时手机要是正好停在一个播完的页面上，
             # 那不是这一轮做的，记了就成了虚报。
