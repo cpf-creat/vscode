@@ -105,7 +105,15 @@ while done < MAX_SECTIONS:
     # quiet=True：30 分钟能跑一千多轮，不关掉会刷一千多行，把有用的信息全冲走
     # 超时/卡死都不再写死"30 分钟"，改成实报耗时 —— 因为卡死检测会提前返回
     t_end = time.time()
-    if kit.wait_for(template2, timeout=1800, quiet=True, stuck_after=STUCK_AFTER) is None:
+    try:
+        found = kit.wait_for(template2, timeout=1800, quiet=True, stuck_after=STUCK_AFTER)
+    except kit.WaitFailed as e:
+        # 截不到图 / 画面不动，都算"出了事"。这里【暂时】跟等满超时一样处理，
+        # 分工自救留到第 4 步。现在先接住，是为了别让一个常见意外
+        # （视频被暂停）炸成一屏 traceback —— 报错没人接，是最难查的一种。
+        print(f"等了 {time.time() - t_end:.0f} 秒，出事了：{e}")
+        exit()
+    if found is None:
         print(f"等了 {time.time() - t_end:.0f} 秒还没变成「已完成」，放弃")
         exit()
     print("这节播完了")

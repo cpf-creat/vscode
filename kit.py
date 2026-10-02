@@ -25,6 +25,26 @@ MAX_SHOT_FAIL = 5      # wait_for 里连续这么多次截不到图就别等了�
 SCREEN_PATH = "images/look.png"   # wait_for 的临时截图存这儿（kit 导入时已 chdir 到项目根）
 
 
+# 三种"没等到"，只有两种算【出了事】，所以单独拎出来。
+# 父类 WaitFailed 是为了让调用者能一句 except kit.WaitFailed 全接住 ——
+# 要不要分开处理，是调用者自己的事。
+class WaitFailed(Exception):
+    """等一个东西出现，等到最后没等到。具体是哪种，看下面两个子类。"""
+
+class OfflineError(WaitFailed):
+    """一直在截不到图 —— 手机像是掉了。
+
+    这种自救没用：你连屏幕都拍不到，谈何"识别一下播放按钮点它"。
+    能做的只有 adb reconnect，或者干脆停下来喊人。
+    """
+
+class StuckError(WaitFailed):
+    """图截得到，但画面一动不动 —— 手机好好的，是界面卡住了。
+
+    这种【能】自救：画面不动，很可能只是视频被暂停了（暂停时播放按钮会显出来）。
+    """
+
+
 def shot(name, tries=5, delay=2):
     """截图。手机偶尔会丢一两次 screencap，所以内建重试：失败了先 reconnect 再试。
 
@@ -130,8 +150,9 @@ def wait_for(template, timeout=10, quiet=False, stuck_after=None, threshold=THRE
             fails += 1
             print(f"  [{time.time() - start:.1f}s] 第 {fails}/{MAX_SHOT_FAIL} 次截图失败：{e}")
             if fails >= MAX_SHOT_FAIL:
-                print(f"  连续 {MAX_SHOT_FAIL} 次都截不到图，手机像是真掉了，不等了")
-                return None
+                # 不打印"不等了"了 —— 那是【决定】，不是【消息】。
+                # 这个函数只负责把出了什么事说清楚，怎么处理交给调用者。
+                raise OfflineError(f"连续 {MAX_SHOT_FAIL} 次都截不到图，手机像是真掉了")
             continue                           # 回循环开头，再来一轮
 
         score, location = find(template, screen)
@@ -146,10 +167,9 @@ def wait_for(template, timeout=10, quiet=False, stuck_after=None, threshold=THRE
         last_screen = screen
 
         if stuck_after and time.time() - last_move > stuck_after:
-            print(f"  画面已经 {stuck_after} 秒一动没动，像是卡死了，不等了")
-            return None
+            raise StuckError(f"画面已经连续 {stuck_after} 秒一动没动")
 
-    return None
+    return None            # 老老实实等满了 timeout，什么异常都没有 —— 这个才是"没等到"
 
 
 if __name__ == "__main__":
