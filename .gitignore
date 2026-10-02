@@ -23,3 +23,11 @@ images/*
 !images/tab_undone.png
 !images/chip_video.png
 !images/template.png
+
+# 电脑版（yuketang.cn）的模板，同样只留模板不留截图
+# 现在真正在用的是下面 4 张；list_todo / done_txt 是上一版留下的，已经用不上了
+images_pc/*
+!images_pc/tag_video.png
+!images_pc/done_all.png
+!images_pc/next_arrow.png
+!images_pc/play_bar.png

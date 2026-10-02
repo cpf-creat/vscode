@@ -15,6 +15,31 @@ import time
 import cv2
 import numpy as np
 
+# ── 后端开关：换设备/换平台，只改这一行 ──────────────────────────────
+#   "adb" = 手机   （adb screencap 截图 + input tap 点击 + 返回键）
+#   "pc"  = 电脑屏幕（截 Windows 屏幕 + 鼠标点击   + 浏览器后退）
+#
+# 认这个开关的只有下面四个函数：shot / tap_at / press_back / back_home。
+# 别的（find / what_page / find_topmost / wait_for / load）跟"图从哪来"无关，
+# 一行都不用动 —— 这就是当初把它们分开放的回报。
+BACKEND = "pc"
+
+BROWSER_TITLE = "Edge"             # pc 后端用：截图前，先把标题带这个名字的窗口提到最前。
+                                   # 【屏幕上任何一个窗口盖住浏览器，截到的就是那个窗口】——
+                                   # 这不是"顺手做的事"，是必须做的，不然一有弹窗就全错。
+                                   #
+                                   # 为什么只写 "Edge" 不写 "Microsoft Edge"：
+                                   # Edge 的标题里 "Microsoft" 和 "Edge" 中间夹着一个【零宽空格】(U+200B)。
+                                   # 打印出来是 "Microsoft Edge"，看着毫无异常，但
+                                   #   "Microsoft Edge" in 标题   → 永远是 False
+                                   # 踩过一次：窗口列表是空的，提窗口被静默跳过，
+                                   # 脚本拍了张终端的图，还一本正经地报"相似度 0.32，认不出"。
+                                   # 教训：跟你不认识的字符串比对时，别信眼睛，信 len() 和 in。
+
+if BACKEND == "pc":
+    import pyautogui
+    import pygetwindow
+
 ROOT = os.path.dirname(os.path.abspath(__file__))   # kit.py 躺在项目根，自己所在的文件夹就是根
 os.chdir(ROOT)
 ADB = os.path.join(ROOT, "tools", "platform-tools", "adb.exe")
@@ -32,7 +57,7 @@ class WaitFailed(Exception):
     """等一个东西出现，等到最后没等到。具体是哪种，看下面两个子类。"""
 
 class OfflineError(WaitFailed):
-    """一直在截不到图 —— 手机像是掉了。
+    """根本截不到图 —— 手机像是掉了（pc 后端：浏览器找不着）。
 
     这种自救没用：你连屏幕都拍不到，谈何"识别一下播放按钮点它"。
     能做的只有 adb reconnect，或者干脆停下来喊人。
@@ -46,11 +71,35 @@ class StuckError(WaitFailed):
 
 
 def shot(name, tries=5, delay=2):
-    """截图。手机偶尔会丢一两次 screencap，所以内建重试：失败了先 reconnect 再试。
+    """截图，返回一张 cv2 格式（BGR）的图，同时落一份到 name。
 
+    手机偶尔会丢一两次 screencap，所以内建重试：失败了先 reconnect 再试。
     重试节奏（tries / delay）是 shot 自己的事 —— "再试一次"本来就包含"等一下"。
     而 back_home 后面要等多久，取决于下一句要干什么，只有调用者知道，所以那个 sleep 留在外面。
+
+    电脑这边没有"截不到"这回事，所以 pc 分支不用重试 —— 但它有自己唯一的坑：
+    屏幕上任何一个窗口盖住浏览器，截到的就是那个窗口。所以每轮先把它提到最前。
     """
+    if BACKEND == "pc":
+        # 标题带 BROWSER_TITLE 的窗口可能有好几个（Edge 开多个窗口就会），
+        # 先用宽度筛掉那些小的浮窗，剩下的第一个就当成主窗口。
+        wins = [w for w in pygetwindow.getAllWindows()
+                if BROWSER_TITLE in w.title and w.width > 500]
+        if not wins:
+            # 找不到就【当场喊】，不能默默往下走。
+            # 往下走的后果是：照样截到一张图，只不过截的是桌面上别的窗口，
+            # 然后拿着它去匹配模板，报一句"相似度 0.32，认不出" —— 查一晚上都查不到这儿来。
+            # 用 OfflineError 而不是 RuntimeError：wait_for 会 catch RuntimeError 然后重试 5 次，
+            # 但"浏览器根本没开"重试一万次也没用，这是配置错了，不是抖动。直接穿透上去。
+            raise OfflineError(f"屏幕上找不到标题带「{BROWSER_TITLE}」的窗口 —— "
+                               f"浏览器关了？还是标题写错了？")
+        wins[0].activate()
+        time.sleep(0.35)                   # 提窗口是异步的，不等一下会截到切换中最丑的那一帧
+        img = pyautogui.screenshot()       # 拿到的是 RGB 的 PIL 图
+        img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)   # cv2 用的是 BGR，不转颜色就反了
+        cv2.imwrite(name, img)             # 还是落一份盘：出问题时能回头看当时屏幕上到底是什么
+        return img
+
     for i in range(tries):
         raw = subprocess.run([ADB, "exec-out", "screencap", "-p"], capture_output=True).stdout
         open(name, "wb").write(raw)
@@ -87,14 +136,31 @@ def color_ratio(bgr, lo, hi):
 
 
 def tap_at(x, y):
+    """在坐标 (x, y) 点一下。这个坐标是 find / find_topmost 给的那个左上角。"""
+    if BACKEND == "pc":
+        pyautogui.click(x, y)
+        return
     subprocess.run([ADB, "shell", "input", "tap", str(x), str(y)])
 
 
 def press_back():
+    """返回上一页。手机 = 按返回键；电脑 = 浏览器的后退。
+
+    电脑这边【不是】原样对应：手机的返回键和应用内的"返回"是同一件事，
+    而浏览器后退可能把你退出登录态、或者退到一个 URL 和刚才完全不同的地方。
+    所以电脑版的调用点要重新想一遍 —— 这句话先留在这儿当提醒。
+    """
+    if BACKEND == "pc":
+        pyautogui.hotkey("alt", "left")
+        return
     subprocess.run([ADB, "shell", "input", "keyevent", "4"])
 
 
 def back_home():
+    """回到最外面那一层。手机 = 按 Home 键回到桌面；电脑 = 按 Home 键滚到页面顶部。"""
+    if BACKEND == "pc":
+        pyautogui.press("home")      # 电脑上没有"桌面"可回，这里只是"滚到顶"，语义已经变了
+        return
     subprocess.run([ADB, "shell", "input", "keyevent", "3"])
 
 def load(path):
