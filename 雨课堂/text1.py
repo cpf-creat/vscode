@@ -19,7 +19,7 @@ MAX_STEPS = 200         # 总步数刹车。改成状态机之后，"一轮"可�
                         # 出口不像以前那么直观（比如点了播放但没点上，下一轮还是"待播放"），
                         # 所以给整个循环再上一道保险。
 
-STUCK_AFTER = 100       # 给 kit.wait_for 的卡死阈值：画面连续这么多秒一动没动就抛异常。
+STUCK_AFTER = 60       # 给 kit.wait_for 的卡死阈值：画面连续这么多秒一动没动就抛异常。
                         # ⚠ 这是拍的估计值，没实测过：视频播到静止课件时画面本来就不动。
                         #   等下次有视频在播，量一下"播放时相邻帧的真实差异"再定。
 
@@ -54,8 +54,10 @@ MARKERS = [
 #第三部分:主循环 —— 每轮【看一眼在哪个页面，只做一件事】
 # 跟上一版最大的区别：不再是"从头到尾走一遍固定流程"，而是"看现在在哪 → 做该做的那一步 → 再回头看"。
 # 好处是中途被打断、或者跑之前手机就已经停在视频页，它都能自己接上，不用退出去重来。
-in_course = False   # 是不是【点进某个课程里了】。专门用来解那个"认不出来的页面"：
+in_course = False   # 我在不在某个课程里。专门用来解那个"认不出来的页面"：
                     # 课程里屏幕上一片空白 = 正在播；不在课程里还认不出 = 陌生页面，该退回去。
+played = False      # 这一节【我点过播放没有】。专门用来决定记账算不算数：
+                    # 启动时手机要是正好停在一个播完的页面上，那是上一轮做完的，不是我做的。
 done = 0            # 真正【做完】了几节
 steps = 0           # 走了多少步（防呆）
 stuck_count = 0     # 连着几次"画面不动"了。每次真的做成了点什么（点了播放/换了页）就清零
@@ -64,7 +66,15 @@ while done < MAX_SECTIONS and steps < MAX_STEPS:
     screen = kit.shot("images/look.png")
     page, score = kit.what_page(screen, MARKERS)
     if page is None and in_course:
-        page = "播放中"      # 课程里四个标志物全不亮，那只能是正在播 —— 靠记忆补出来
+        page = "播放中"      # 课程里标志物全不亮，那只能是正在播 —— 靠记忆补出来
+
+    # 「待播放」只可能出现在课程里（播放按钮就长在视频上）。所以看到它就等于确认
+    # "我在课程里" —— 不必非得是我自己点进去的才知道。
+    # 少了这一句，手机本来就停在课程里时（上一轮的遗留、或者你手动点进去看了看），
+    # 点完播放屏幕变成一片空白，就会被当成"陌生页面"退出课程，白跑一趟。
+    if page == "待播放":
+        in_course = True
+
     print(f"=== 第 {done + 1} 节 | 第 {steps} 步 | 现在在：{page or '不认识的页面'}"
           f"（最高分 {score:.3f}）===")
 
@@ -79,6 +89,7 @@ while done < MAX_SECTIONS and steps < MAX_STEPS:
             break                       # 注意 done 没有 +1：这一节压根没做
         kit.tap_at(chip[0] + template4.shape[1] // 2, chip[1] + CARD_DY)
         in_course = True
+        played = False      # 新的一节，还没播过
         time.sleep(3)
 
     elif page == "待播放":
@@ -89,6 +100,8 @@ while done < MAX_SECTIONS and steps < MAX_STEPS:
         # "待播放"，那 find_topmost 必然也找得到。同一个计算不用查两遍。
         print("点播放")
         kit.tap_at(loc[0] + template.shape[1] // 2, loc[1] + template.shape[0] // 2)
+        in_course = True    # 播放按钮就长在视频上，点得到它就说明在课程里
+        played = True       # 这一节是我点起来的，等会儿播完要记账
         stuck_count = 0     # 真的做了点什么 = 有进展，之前那些"画面不动"一笔勾销
         time.sleep(4)
 
@@ -120,13 +133,16 @@ while done < MAX_SECTIONS and steps < MAX_STEPS:
 
     elif page == "已播完":
         stuck_count = 0
-        if in_course:
-            # 只有【自己点进去的】才记账。启动时手机要是正好停在一个播完的页面上，
-            # 那不是这一轮做的，记了就成了虚报。
+        if played:
+            # 只有【我点过播放的】才记账。启动时手机要是正好停在一个播完的页面上，
+            # 那是上一轮做完的，记了就成了虚报。
+            # 用 played 而不是 in_course：手机本来就停在课程里时 in_course 也可能是 True，
+            # 但那不表示这一节是我做的。
             done += 1
             print(f"这节做完了，累计 {done} 节")
         kit.press_back()
         in_course = False
+        played = False
         time.sleep(2)
 
     else:
@@ -134,6 +150,8 @@ while done < MAX_SECTIONS and steps < MAX_STEPS:
         # 按一次返回：这是【有把握】的那一步（跟以前"只退一次"是同一个道理）。
         print("这个页面不认识，按一次返回看看")
         kit.press_back()
+        in_course = False
+        played = False
         time.sleep(2)
 
 print(f"\n收工，这次一共做了 {done} 节。")
