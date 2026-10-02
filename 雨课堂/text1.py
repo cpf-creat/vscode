@@ -30,7 +30,14 @@ def find_topmost(template, screen):
 def wait_for(template, timeout=10, quiet=False):
     start = time.time()
     while time.time() - start < timeout:
-        screen = kit.shot("images/look.png")
+        try:
+            screen = kit.shot("images/look.png")
+        except RuntimeError as e:
+            # kit.shot 自己已经重试过好几次了，还是不行 → 这一轮就当没图。
+            # 别让一次抖动把整个脚本带走：跳过这轮继续等，说不定它自己就好了。
+            # （等 30 分钟那个场景要是死在这里，前面全白等。）
+            print(f"  [{time.time() - start:.1f}s] 截图失败，跳过这轮：{e}")
+            continue                       # 回循环开头，再来一轮
         score, location = kit.find(template, screen)
         if not quiet:                      # 等 24 分钟时关掉，不然刷几百行
             print(f"  [{time.time() - start:.1f}s] 相似度 {score:.3f}")
