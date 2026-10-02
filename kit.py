@@ -82,6 +82,29 @@ def find_topmost(template, screen, threshold=THRESHOLD):
     return int(xs[i]), int(ys[i])
 
 
+def what_page(screen, markers):
+    """看一眼现在在哪一页。
+
+    markers 是调用者给的名单：[(页面名, 模板, 阈值), ...]
+    —— kit 不认识任何 App，页面叫什么名字、拿什么当标志，只有写脚本的人知道。
+
+    返回 (页面名, 得分)：认得出就给页面名，一个都不达标就给 (None, 最高分)。
+    认不出也把最高分带出来，是为了分得清"完全不像"和"差一点点" ——
+    只返回一个 None 的话，出问题只能靠猜。
+
+    【名单的顺序就是优先级】：从上往下比，谁先达标就返回谁。
+    所以"标志物比较容易认错的页面"要往后放。
+    """
+    best_name, best_score = None, 0.0
+    for name, template, threshold in markers:
+        score, _ = find(template, screen)
+        if score > best_score:
+            best_name, best_score = name, score          # 记着目前看到的最像的，认不出时好报告
+        if score >= threshold:
+            return name, score
+    return None, best_score
+
+
 def wait_for(template, timeout=10, quiet=False, stuck_after=None, threshold=THRESHOLD):
     """等 template 出现，最多等 timeout 秒。找到返回 (x, y)，没等到返回 None。
 
