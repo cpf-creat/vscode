@@ -13,10 +13,16 @@ import subprocess
 import time
 
 import cv2
+import numpy as np
 
 ROOT = os.path.dirname(os.path.abspath(__file__))   # kit.py 躺在项目根，自己所在的文件夹就是根
 os.chdir(ROOT)
 ADB = os.path.join(ROOT, "tools", "platform-tools", "adb.exe")
+
+THRESHOLD = 0.8        # 相似度及格线。matchTemplate 永远会返回一个"最像的"，哪怕只有三分像
+MOVE_EPS = 0.5         # 相邻两张截图差异小于它 = 画面没动（完全静止是 0.0，在播时远大于它）
+MAX_SHOT_FAIL = 5      # wait_for 里连续这么多次截不到图就别等了（手机像是真掉了）
+SCREEN_PATH = "images/look.png"   # wait_for 的临时截图存这儿（kit 导入时已 chdir 到项目根）
 
 
 def shot(name, tries=5, delay=2):
@@ -60,6 +66,68 @@ def load(path):
         #raise:把错误说成人话抛出
         raise FileNotFoundError(f"读不到图：{path}（检查文件名和路径）")
     return img
+
+def find_topmost(template, screen, threshold=THRESHOLD):
+    """同一个东西在屏幕上出现好几遍时，只取【最靠上】的那个。
+
+    minMaxLoc 只给一个"最像的"，位置随机，所以这里得自己把够像的都捞出来再挑。
+    注意捞到的是【一片】位置而不是一个 —— 滑动窗口挪 1 像素画面几乎没变，
+    相邻位置分数照样很高，所以别把捞到的个数当成"屏幕上有几个"。
+    """
+    scores = cv2.matchTemplate(screen, template, cv2.TM_CCOEFF_NORMED)
+    ys, xs = np.where(scores >= threshold)     # 注意这里返回的是 行号(y)、列号(x)
+    if len(xs) == 0:
+        return None
+    i = ys.argmin()                            # 行号最小的那个 = 最靠上的
+    return int(xs[i]), int(ys[i])
+
+
+def wait_for(template, timeout=10, quiet=False, stuck_after=None, threshold=THRESHOLD):
+    """等 template 出现，最多等 timeout 秒。找到返回 (x, y)，没等到返回 None。
+
+    timeout 不是"睡这么久"，是"给这个循环这么多秒的额度"：
+    它一遍遍地截图→比对，每轮约 1 秒，所以 1800 约等于 1800 轮。
+
+    quiet:       True = 不打印每轮相似度（等 30 分钟会刷一千多行）
+    stuck_after: 画面连续这么多秒一动没动 → 认为卡死，提前放弃。None = 不检查。
+                 有坑：视频播到静止课件时画面本来就不动，值别设太小。
+    """
+    start = time.time()
+    last_screen = None          # 上一轮的截图，用来判断画面动没动
+    last_move = start           # 上一次画面"动过"的时刻
+    fails = 0                   # 连续截图失败次数
+
+    while time.time() - start < timeout:
+        try:
+            screen = shot(SCREEN_PATH)
+            fails = 0                          # 截到一次就清零
+        except RuntimeError as e:
+            # shot 自己已经重试过好几次了，还是不行 → 这一轮就当没图。
+            # 别让一次抖动把整个脚本带走：跳过这轮继续等，说不定它自己就好了。
+            fails += 1
+            print(f"  [{time.time() - start:.1f}s] 第 {fails}/{MAX_SHOT_FAIL} 次截图失败：{e}")
+            if fails >= MAX_SHOT_FAIL:
+                print(f"  连续 {MAX_SHOT_FAIL} 次都截不到图，手机像是真掉了，不等了")
+                return None
+            continue                           # 回循环开头，再来一轮
+
+        score, location = find(template, screen)
+        if not quiet:                          # 等 30 分钟那种要关掉，不然刷一千多行
+            print(f"  [{time.time() - start:.1f}s] 相似度 {score:.3f}")
+        if score >= threshold:
+            return location
+
+        # 画面动过就把"静止"计时归零。完全静止时 absdiff 是 0.0，在播时远大于 MOVE_EPS
+        if last_screen is not None and cv2.absdiff(screen, last_screen).mean() > MOVE_EPS:
+            last_move = time.time()
+        last_screen = screen
+
+        if stuck_after and time.time() - last_move > stuck_after:
+            print(f"  画面已经 {stuck_after} 秒一动没动，像是卡死了，不等了")
+            return None
+
+    return None
+
 
 if __name__ == "__main__":
       # 只有【直接跑 kit.py】时才执行这里
