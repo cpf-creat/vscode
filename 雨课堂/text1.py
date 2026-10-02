@@ -17,7 +17,8 @@ class Tee:
     """同时往【屏幕】和【文件】写。
 
     为什么不每处 print 后面再补一句写文件：跑一晚上，终端滚过去就没了。
-    半夜崩了，手里没有任何记录 —— 停在第几步、当时判成了哪一页、等了多久，
+    半夜崩了，手里没有任何记录 —— 停在第几步、当时判成了哪
+    一页、等了多久，
     全不知道。而 print 一共十几处，漏一处就漏一块真相。
 
     最省事的办法是换掉 sys.stdout：代码里所有 print 一个字都不用改，
@@ -43,6 +44,11 @@ class Tee:
 
 os.makedirs("logs", exist_ok=True)      # kit 导入时已经 chdir 到项目根了
 sys.stdout = Tee("logs/run.log")        # 从这一行起，下面所有 print 都自动写文件
+sys.stderr = sys.stdout                 # 报错也走同一个出口。
+                                        # 少了这一行，脚本一旦抛异常崩掉，那行 traceback
+                                        # 只打在终端上、日志里没有 —— 事后翻日志只知道
+                                        # "停在哪儿"，不知道"为什么停"。
+                                        # （2026-10-02 就被这个坑卡住过一次破案）
 
 print("=" * 60)
 print(f"=== 新一次运行 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
@@ -57,7 +63,7 @@ MAX_STEPS = 200         # 总步数刹车。改成状态机之后，"一轮"可�
                         # 出口不像以前那么直观（比如点了播放但没点上，下一轮还是"待播放"），
                         # 所以给整个循环再上一道保险。
 
-STUCK_AFTER = 60       # 给 kit.wait_for 的卡死阈值：画面连续这么多秒一动没动就抛异常。
+STUCK_AFTER = 30       # 给 kit.wait_for 的卡死阈值：画面连续这么多秒一动没动就抛异常。
                         # ⚠ 这是拍的估计值，没实测过：视频播到静止课件时画面本来就不动。
                         #   等下次有视频在播，量一下"播放时相邻帧的真实差异"再定。
 
@@ -135,6 +141,18 @@ while done < MAX_SECTIONS and steps < MAX_STEPS:
           f"现在在：{page or '不认识的页面'}（最高分 {score:.3f}）===")
 
     if page == "列表页":
+        # ── 先把自己要的状态摆好：切到「未完成」页 ──
+        # 「未完成 (40)」这几个字不选中也印在 tab 栏上，所以 tab_undone 连
+        # 「学习日志」页也认 —— 它只能证明"这是课程页"，证明不了"这是未完成页"。
+        # 不点这一下，下面就会拿「学习日志」里的第一条当目标，而那条是已完成的：
+        # 点进去 → 已播完 → 退回来 → 再点同一条，原地打转。
+        # 已经在「未完成」页时再点一次没有副作用，所以不用先判断自己在哪一页。
+        tab = kit.find_topmost(template3, screen)
+        if tab is not None:
+            kit.tap_at(tab[0] + template3.shape[1] // 2, tab[1] + template3.shape[0] // 2)
+            time.sleep(2)                              # 等列表换过来
+            screen = kit.shot("images/look.png")       # 换了一批内容，得重新看一眼再挑
+
         # 做完的会自动从「未完成」消失、下一项顶上来 → 第一项【永远】是下一个要做的
         chip = kit.find_topmost(template4, screen)
         if chip is None:
@@ -178,8 +196,19 @@ while done < MAX_SECTIONS and steps < MAX_STEPS:
             # 自救不需要单独写一段代码，它就是"再看一眼"。
             stuck_count += 1
             if stuck_count > MAX_STUCK:
-                print(f"连着 {stuck_count} 次画面都不动，不像是暂停，放弃")
-                exit()
+                # 四分钟一动不动，"退回去看一眼"也看不出是暂停 —— 那就不是暂停，
+                # 是路上撞进了一个压根不认识的页面（比如被点到了「我的习题集」）。
+                # 【以前这里直接 exit()，整轮就断死在这个页面上】。
+                # 现在按一次返回走开，并且把 in_course 清掉 ——
+                # 关键就是清掉它：不清的话下一轮又会被判成"播放中"，
+                # 转一圈回到同一句话上。清掉之后它才会被当成"陌生页面"接着往回退。
+                print(f"连着 {stuck_count} 次画面都不动，不像是暂停 —— 按返回退出去重来")
+                kit.press_back()
+                in_course = False
+                played = False
+                stuck_count = 0
+                time.sleep(2)
+                continue
             print(f"画面不动了（第 {stuck_count}/{MAX_STUCK} 次）—— 退回去看看在哪一页")
             continue
         if found is None:

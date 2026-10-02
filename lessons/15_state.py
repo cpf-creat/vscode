@@ -70,18 +70,23 @@ def check(what, ok):
 
 # ---------- 场景一：正常做一节 ----------
 script1 = [
-    kit.load("images/page_list.png"),      # ① 列表页 → 点第一张卡
+    kit.load("images/page_list.png"),      # ① 列表页（可能是「学习日志」）→ 先点「未完成」Tab
+    kit.load("images/page_list.png"),      #    切完之后【重新看一眼】，点卡片以这张为准
     kit.load("images/page_paused.png"),    # ② 进了课程但停着 → 点播放
     kit.load("images/page_playing.png"),   # ③ 播起来了 → 等「已完成」
     F,                                     #    （这张被 wait_for 内部吃掉）
     F,                                     # ④ 等到了 → 记账 + 返回
     canvas,                                # ⑤ 列表空了 → 收工
 ]
-names1 = ["列表页", "待播放", "播放中", "已播完(给wait_for用)", "已播完", "空列表"]
+names1 = ["列表页", "列表页(切完Tab)", "待播放", "播放中", "已播完(给wait_for用)", "已播完", "空列表"]
 log, done = play("场景一：正常做一节", names1, script1)
+    # 动作顺序应该就是这个：
+    #   点击 ①切「未完成」Tab → 点击 ②点卡片 → 点击 ③点播放 → 返回 ④记完账退出来
+    #   最后那个「点击」是第 2 节开头：列表已经空了，它还是先点了一下 Tab
+    #   ——空列表上点这个 Tab 什么也不会发生，所以不用为它加判断。
+want = ["点击", "点击", "点击", "返回", "点击"]
 results = [
-    check(f"动作顺序 {[a[0] for a in log]} == ['点击', '点击', '返回']",
-          [a[0] for a in log] == ["点击", "点击", "返回"]),
+    check(f"动作顺序 {[a[0] for a in log]} == {want}", [a[0] for a in log] == want),
     check(f"记账 {done} 节 == 1 节", done == 1),
 ]
 
@@ -98,7 +103,8 @@ script2 = [
 names2 = ["待播放(启动时就在这)", "播放中", "已播完(给wait_for用)", "已播完", "已播完", "空列表"]
 log, done = play("场景二：启动时手机已经停在课程里", names2, script2)
 results += [
-    check("播放中那一步没有误按返回", ("返回", 1) not in log),
+    # 按名字查下标，不写死数字 —— 剧本以后多加一张图，这行不用跟着改
+    check("播放中那一步没有误按返回", ("返回", names2.index("播放中")) not in log),
     check(f"记账 {done} 节 == 1 节", done == 1),
 ]
 
